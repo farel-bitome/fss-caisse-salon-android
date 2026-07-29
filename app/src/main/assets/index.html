@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>FSS-CAISSE-SALON</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ÉCRAN DE CONNEXION -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-title">FSS-CAISSE-SALON</div>
+    <div class="login-subtitle">Connexion requise</div>
+    <div class="field"><label>Utilisateur</label><input type="text" id="login-username"></div>
+    <div class="field"><label>Mot de passe</label><input type="password" id="login-password"></div>
+    <p class="error-text" id="login-error"></p>
+    <button class="btn" id="login-btn">Se connecter</button>
+  </div>
+</div>
+
+<!-- APPLICATION -->
+<div id="app" style="display:none;">
+  <header id="topbar">
+    <button id="menu-btn">☰</button>
+    <div id="topbar-title">Caisse</div>
+    <button id="logout-btn">⏻</button>
+  </header>
+
+  <main id="view"></main>
+</div>
+
+<!-- MENU LATÉRAL -->
+<div id="drawer-overlay">
+  <nav id="drawer">
+    <div class="drawer-header">
+      <div id="drawer-user"></div>
+      <div id="drawer-role"></div>
+    </div>
+    <button class="drawer-item active" data-view="caisse">🛒 Caisse</button>
+    <button class="drawer-item" data-view="fidelite">🏅 Fidélité</button>
+    <button class="drawer-item" data-view="historique">🕘 Historique</button>
+    <button class="drawer-item" data-view="prestations">🏷️ Prestations</button>
+    <button class="drawer-item" data-view="personnel">👥 Personnel</button>
+    <button class="drawer-item" data-view="utilisateurs">🛡️ Utilisateurs</button>
+    <button class="drawer-item" data-view="pointage">⏱️ Pointage</button>
+    <button class="drawer-item" data-view="paie">🧮 Paie</button>
+    <button class="drawer-item" data-view="bilan">📊 Bilan</button>
+    <button class="drawer-item" data-view="cloture">📄 Clôture</button>
+    <button class="drawer-item" data-view="reglages">⚙️ Réglages</button>
+  </nav>
+</div>
+
+<div id="modal-overlay">
+  <div id="modal-content"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -8,9 +8,34 @@
 </head>
 <body>
 
+<!-- ÉCRAN D'ACTIVATION (licence liée à cet appareil) -->
+<div id="activation-screen" style="display:none;">
+  <div class="login-box">
+    <div class="login-title">Activation requise</div>
+    <div class="login-subtitle" id="activation-subtitle">Période d'essai terminée</div>
+    <p style="font-size:12px; color:var(--muted); margin-bottom:14px;">
+      Communiquez l'identifiant ci-dessous à FALLSERVICES&amp;SOLUTIONS INFO pour recevoir votre clé d'activation.
+    </p>
+    <div class="field">
+      <label>Identifiant de cet appareil</label>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="activation-device-id" readonly style="font-family:'Consolas',monospace; letter-spacing:1px;">
+        <button class="btn secondary small" id="activation-copy" style="width:auto; padding:0 14px;">Copier</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Clé d'activation</label>
+      <input type="text" id="activation-key" placeholder="XXXX-XXXX-XXXX-XXXX" style="font-family:'Consolas',monospace; letter-spacing:1px; text-transform:uppercase;">
+    </div>
+    <p class="error-text" id="activation-error"></p>
+    <button class="btn" id="activation-confirm">Activer</button>
+  </div>
+</div>
+
 <!-- ÉCRAN DE CONNEXION -->
 <div id="login-screen">
   <div class="login-box">
+    <div id="login-logo" style="display:none; text-align:center; margin-bottom:14px;"><img src="" style="max-width:80px; max-height:80px; object-fit:contain;"></div>
     <div class="login-title">FSS-CAISSE-SALON</div>
     <div class="login-subtitle">Connexion requise</div>
     <div class="field"><label>Utilisateur</label><input type="text" id="login-username"></div>
@@ -43,9 +68,6 @@
     <button class="drawer-item" data-view="historique">🕘 Historique</button>
     <button class="drawer-item" data-view="prestations">🏷️ Prestations</button>
     <button class="drawer-item" data-view="personnel">👥 Personnel</button>
-    <button class="drawer-item" data-view="utilisateurs">🛡️ Utilisateurs</button>
-    <button class="drawer-item" data-view="pointage">⏱️ Pointage</button>
-    <button class="drawer-item" data-view="paie">🧮 Paie</button>
     <button class="drawer-item" data-view="bilan">📊 Bilan</button>
     <button class="drawer-item" data-view="cloture">📄 Clôture</button>
     <button class="drawer-item" data-view="reglages">⚙️ Réglages</button>

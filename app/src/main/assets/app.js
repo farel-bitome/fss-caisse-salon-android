@@ -8,6 +8,7 @@ const DEFAULT_CONFIG = {
   phone: '',
   footer: 'Merci pour votre visite, à très vite !',
   currency: 'FCFA',
+  logo: null,
   ticketCounter: 1,
   loyaltyReward1Id: null,
   loyaltyReward2Id: null,
@@ -25,6 +26,7 @@ const state = {
   payrollEntries: [],
   withdrawals: [],
   caisseOpenings: [],
+  heldOrders: [],
   cart: [],
   selectedStaffId: null,
   clientName: '',
@@ -54,10 +56,170 @@ function monthLabel(m) {
 function fmtDate(iso) { return new Date(iso).toLocaleDateString('fr-FR'); }
 function fmtDateTime(iso) { return new Date(iso).toLocaleString('fr-FR'); }
 
-async function sha256Hex(text) {
-  const enc = new TextEncoder().encode(text);
-  const hash = await crypto.subtle.digest('SHA-256', enc);
-  return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, '0')).join('');
+// Implémentation SHA-256 en JavaScript pur (ne dépend pas de crypto.subtle,
+// qui exige un "contexte sécurisé" que les WebView Android n'accordent pas
+// toujours aux pages chargées depuis file:///android_asset/).
+function sha256Bytes(bytes) {
+  function rightRotate(v, n) { return (v >>> n) | (v << (32 - n)); }
+  const K = [
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+  ];
+  let H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+
+  const bitLen = bytes.length * 8;
+  const withOne = new Uint8Array(((bytes.length + 9 + 63) & ~63));
+  withOne.set(bytes);
+  withOne[bytes.length] = 0x80;
+  const dv = new DataView(withOne.buffer);
+  dv.setUint32(withOne.length - 4, bitLen >>> 0);
+  dv.setUint32(withOne.length - 8, Math.floor(bitLen / 0x100000000));
+
+  for (let chunkStart = 0; chunkStart < withOne.length; chunkStart += 64) {
+    const w = new Array(64);
+    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(chunkStart + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const s0 = rightRotate(w[i - 15], 7) ^ rightRotate(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = rightRotate(w[i - 2], 17) ^ rightRotate(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    let [a, b, c, d, e, f, g, h] = H;
+    for (let i = 0; i < 64; i++) {
+      const S1 = rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const temp1 = (h + S1 + ch + K[i] + w[i]) | 0;
+      const S0 = rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (S0 + maj) | 0;
+      h = g; g = f; f = e; e = (d + temp1) | 0;
+      d = c; c = b; b = a; a = (temp1 + temp2) | 0;
+    }
+    H = [H[0]+a, H[1]+b, H[2]+c, H[3]+d, H[4]+e, H[5]+f, H[6]+g, H[7]+h].map((v) => v | 0);
+  }
+  const out = new Uint8Array(32);
+  const outDv = new DataView(out.buffer);
+  H.forEach((v, i) => outDv.setUint32(i * 4, v >>> 0));
+  return out;
+}
+
+function sha256Hex(message) {
+  const bytes = sha256Bytes(new TextEncoder().encode(message));
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// HMAC-SHA256 en JavaScript pur, utilisé pour valider les clés de licence
+// (même algorithme que src/main/licensing.js et les générateurs Windows/HTML).
+function hmacSha256Hex(key, message) {
+  const blockSize = 64;
+  const enc = new TextEncoder();
+  let keyBytes = enc.encode(key);
+  if (keyBytes.length > blockSize) keyBytes = sha256Bytes(keyBytes);
+  const keyPadded = new Uint8Array(blockSize);
+  keyPadded.set(keyBytes);
+
+  const ipad = new Uint8Array(blockSize);
+  const opad = new Uint8Array(blockSize);
+  for (let i = 0; i < blockSize; i++) {
+    ipad[i] = keyPadded[i] ^ 0x36;
+    opad[i] = keyPadded[i] ^ 0x5c;
+  }
+  const msgBytes = enc.encode(message);
+  const innerInput = new Uint8Array(ipad.length + msgBytes.length);
+  innerInput.set(ipad);
+  innerInput.set(msgBytes, ipad.length);
+  const innerHash = sha256Bytes(innerInput);
+
+  const outerInput = new Uint8Array(opad.length + innerHash.length);
+  outerInput.set(opad);
+  outerInput.set(innerHash, opad.length);
+  const finalHash = sha256Bytes(outerInput);
+
+  return Array.from(finalHash).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ============================================================
+// LICENCE — essai de 3 jours, puis activation obligatoire
+// ============================================================
+// Même secret que src/main/licensing.js (Electron) et les générateurs
+// Windows/HTML/Android — une clé générée pour cet identifiant fonctionnera.
+const LICENSE_SECRET = 'FSS-CAISSE-SALON-2026-FALLSERVICES-9f3a7c1e5b2d4681';
+const TRIAL_DAYS = 3;
+
+function getDeviceId() {
+  if (window.AndroidDevice && window.AndroidDevice.getDeviceId) {
+    const id = window.AndroidDevice.getDeviceId();
+    if (id) return id.toUpperCase();
+  }
+  // Repli (test hors app Android, ex. navigateur) : identifiant généré et conservé localement.
+  let fallback = localStorage.getItem('fss-fallback-device-id');
+  if (!fallback) {
+    fallback = Array.from(crypto.getRandomValues(new Uint8Array(8))).map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+    localStorage.setItem('fss-fallback-device-id', fallback);
+  }
+  return fallback;
+}
+
+function isValidLicenseKey(deviceId, key) {
+  if (!key) return false;
+  const expected = hmacSha256Hex(LICENSE_SECRET, deviceId.trim().toUpperCase()).toUpperCase();
+  const expectedFormatted = expected.slice(0, 16).match(/.{1,4}/g).join('-');
+  return key.trim().toUpperCase() === expectedFormatted;
+}
+
+function getLicenseStatus() {
+  const deviceId = getDeviceId();
+  const storedKey = localStorage.getItem('fss-license-key');
+  const licensed = storedKey ? isValidLicenseKey(deviceId, storedKey) : false;
+
+  let firstLaunch = localStorage.getItem('fss-first-launch');
+  if (!firstLaunch) {
+    firstLaunch = new Date().toISOString();
+    localStorage.setItem('fss-first-launch', firstLaunch);
+  }
+  const daysElapsed = Math.floor((Date.now() - new Date(firstLaunch).getTime()) / (1000 * 60 * 60 * 24));
+  const daysLeft = Math.max(0, TRIAL_DAYS - daysElapsed);
+  const trialExpired = daysElapsed >= TRIAL_DAYS;
+
+  return { deviceId, licensed, trialExpired, daysLeft, blocked: trialExpired && !licensed };
+}
+
+function showActivationScreen(status) {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('activation-screen').style.display = 'flex';
+  document.getElementById('activation-subtitle').textContent = status.trialExpired
+    ? "Période d'essai de 3 jours terminée"
+    : 'Activation requise';
+  document.getElementById('activation-device-id').value = status.deviceId;
+
+  document.getElementById('activation-copy').addEventListener('click', () => {
+    navigator.clipboard.writeText(status.deviceId);
+    const btn = document.getElementById('activation-copy');
+    const original = btn.textContent;
+    btn.textContent = 'Copié !';
+    setTimeout(() => { btn.textContent = original; }, 1500);
+  });
+
+  document.getElementById('activation-confirm').addEventListener('click', () => {
+    const key = document.getElementById('activation-key').value.trim();
+    const errorEl = document.getElementById('activation-error');
+    if (!key) { errorEl.textContent = "Veuillez saisir une clé d'activation."; return; }
+    if (!isValidLicenseKey(status.deviceId, key)) { errorEl.textContent = 'Clé invalide pour cet appareil.'; return; }
+    localStorage.setItem('fss-license-key', key.trim().toUpperCase());
+    location.reload();
+  });
+}
+
+function showTrialBanner(daysLeft) {
+  const bar = document.createElement('div');
+  bar.id = 'trial-banner';
+  bar.textContent = `Version d'essai — ${daysLeft} jour(s) restant(s) avant activation obligatoire`;
+  document.body.appendChild(bar);
 }
 
 // ---------- Stockage local (localStorage) ----------
@@ -77,6 +239,7 @@ function load() {
       state.payrollEntries = data.payrollEntries || [];
       state.withdrawals = data.withdrawals || [];
       state.caisseOpenings = data.caisseOpenings || [];
+      state.heldOrders = data.heldOrders || [];
     }
   } catch (e) { /* première utilisation */ }
 }
@@ -94,6 +257,7 @@ function save() {
     payrollEntries: state.payrollEntries,
     withdrawals: state.withdrawals,
     caisseOpenings: state.caisseOpenings,
+    heldOrders: state.heldOrders,
   }));
 }
 
@@ -131,6 +295,8 @@ async function doLogin() {
   const hash = await sha256Hex(password);
   if (hash !== user.passwordHash) { errorEl.textContent = 'Utilisateur ou mot de passe incorrect.'; return; }
   state.currentUser = user;
+  state.viewHistory = [];
+  state.view = null;
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   document.getElementById('drawer-user').textContent = user.username;
@@ -149,7 +315,6 @@ document.getElementById('logout-btn').addEventListener('click', () => {
 // ============================================================
 // MENU LATÉRAL
 // ============================================================
-document.getElementById('menu-btn').addEventListener('click', () => document.getElementById('drawer-overlay').classList.add('active'));
 document.getElementById('drawer-overlay').addEventListener('click', (e) => {
   if (e.target.id === 'drawer-overlay') document.getElementById('drawer-overlay').classList.remove('active');
 });
@@ -160,22 +325,41 @@ document.querySelectorAll('.drawer-item').forEach((btn) => {
   });
 });
 
-function switchView(view) {
+function switchView(view, isBack) {
+  if (!isBack && state.view && state.view !== view) {
+    state.viewHistory = state.viewHistory || [];
+    state.viewHistory.push(state.view);
+  }
   state.view = view;
   document.querySelectorAll('.drawer-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   const titles = {
     caisse: 'Caisse', fidelite: 'Fidélité', historique: 'Historique', prestations: 'Prestations',
-    personnel: 'Personnel', utilisateurs: 'Utilisateurs', pointage: 'Pointage', paie: 'Paie',
-    bilan: 'Bilan', cloture: 'Clôture', reglages: 'Réglages',
+    personnel: 'Personnel', bilan: 'Bilan', cloture: 'Clôture', reglages: 'Réglages',
   };
   document.getElementById('topbar-title').textContent = titles[view] || '';
+  updateMenuBtn();
   const renderers = {
     caisse: renderCaisse, fidelite: renderFidelite, historique: renderHistorique, prestations: renderPrestations,
-    personnel: renderPersonnel, utilisateurs: renderUtilisateurs, pointage: renderPointage, paie: renderPaie,
-    bilan: renderBilan, cloture: renderCloture, reglages: renderReglages,
+    personnel: renderPersonnel, bilan: renderBilan, cloture: renderCloture, reglages: renderReglages,
   };
   (renderers[view] || renderCaisse)();
 }
+
+function updateMenuBtn() {
+  const btn = document.getElementById('menu-btn');
+  const hasHistory = (state.viewHistory || []).length > 0;
+  btn.textContent = hasHistory ? '←' : '☰';
+}
+
+document.getElementById('menu-btn').addEventListener('click', () => {
+  const hasHistory = (state.viewHistory || []).length > 0;
+  if (hasHistory) {
+    const previousView = state.viewHistory.pop();
+    switchView(previousView, true);
+  } else {
+    document.getElementById('drawer-overlay').classList.add('active');
+  }
+});
 
 // ============================================================
 // CAISSE
@@ -183,14 +367,18 @@ function switchView(view) {
 function renderCaisse() {
   const el = document.getElementById('view');
   const opening = state.caisseOpenings.find((o) => o.date === todayStr());
-  const isCashier = ['Caissier', 'Caissière'].includes(state.currentUser.role);
-  if (isCashier && !opening) { renderOuvertureCaisse(); return; }
+  if (!opening) { renderOuvertureCaisse(); return; }
 
   const cats = ['Tous', ...state.categories];
   el.innerHTML = `
-    <div class="search-bar">
-      <span>🔍</span>
-      <input type="text" id="caisse-search" placeholder="Rechercher une prestation..." value="${state.searchQuery}">
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+      <div class="search-bar" style="flex:1; margin-bottom:0;">
+        <span>🔍</span>
+        <input type="text" id="caisse-search" placeholder="Rechercher une prestation..." value="${state.searchQuery}">
+      </div>
+      <button class="btn secondary small" id="held-orders-btn" style="position:relative; flex-shrink:0;">
+        ⏳ En attente${state.heldOrders.length ? ` (${state.heldOrders.length})` : ''}
+      </button>
     </div>
     <div class="pill-row" id="cat-pills">
       ${cats.map((c) => `<button class="pill ${state.currentCategory === c ? 'active' : ''}" data-cat="${c}">${c}</button>`).join('')}
@@ -206,6 +394,7 @@ function renderCaisse() {
     b.addEventListener('click', () => { state.currentCategory = b.dataset.cat; renderCaisse(); });
   });
   document.getElementById('cart-fab').addEventListener('click', openCheckoutModal);
+  document.getElementById('held-orders-btn').addEventListener('click', openHeldOrdersModal);
   renderServicesGrid();
   updateCartFab();
 }
@@ -282,6 +471,72 @@ function updateCartFab() {
   }
 }
 
+// ---------- Commandes en attente ----------
+function holdCurrentOrder() {
+  if (state.cart.length === 0) return;
+  state.heldOrders.push({
+    id: uid(),
+    cart: state.cart.map((i) => ({ ...i })),
+    staffId: state.selectedStaffId,
+    clientName: state.clientName,
+    createdAt: new Date().toISOString(),
+  });
+  state.cart = [];
+  state.selectedStaffId = null;
+  state.clientName = '';
+  save();
+  closeModal();
+  renderCaisse();
+}
+
+function openHeldOrdersModal() {
+  if (state.heldOrders.length === 0) {
+    openModal(`<h3>Commandes en attente</h3><p class="empty-state">Aucune commande en attente.</p><div class="modal-actions"><button class="btn secondary" id="ho-close" style="width:100%;">Fermer</button></div>`);
+    document.getElementById('ho-close').addEventListener('click', closeModal);
+    return;
+  }
+  openModal(`
+    <h3>Commandes en attente</h3>
+    <div class="list-box">${state.heldOrders.map((o) => {
+      const total = o.cart.reduce((s, i) => s + i.price * i.qty, 0);
+      const staffMember = state.staff.find((s) => s.id === o.staffId);
+      return `
+        <div class="list-row">
+          <div>
+            <strong>${o.clientName || 'Client de passage'}</strong>
+            <div style="font-size:11px; color:var(--muted);">${o.cart.length} article(s) · ${fmt(total)} ${staffMember ? '· ' + staffMember.name : ''}</div>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button class="btn small" data-resume="${o.id}">Reprendre</button>
+            <button class="icon-btn danger" data-discard="${o.id}">🗑</button>
+          </div>
+        </div>
+      `;
+    }).join('')}</div>
+    <div class="modal-actions"><button class="btn secondary" id="ho-close" style="width:100%;">Fermer</button></div>
+  `);
+  document.getElementById('ho-close').addEventListener('click', closeModal);
+  document.querySelectorAll('[data-resume]').forEach((b) => b.addEventListener('click', () => {
+    if (state.cart.length > 0 && !confirm('Le panier actuel sera remplacé. Continuer ?')) return;
+    const order = state.heldOrders.find((o) => o.id === b.dataset.resume);
+    state.cart = order.cart.map((i) => ({ ...i }));
+    state.selectedStaffId = order.staffId;
+    state.clientName = order.clientName;
+    state.heldOrders = state.heldOrders.filter((o) => o.id !== order.id);
+    save();
+    closeModal();
+    renderCaisse();
+    updateCartFab();
+  }));
+  document.querySelectorAll('[data-discard]').forEach((b) => b.addEventListener('click', () => {
+    if (!confirm('Supprimer cette commande en attente ?')) return;
+    state.heldOrders = state.heldOrders.filter((o) => o.id !== b.dataset.discard);
+    save();
+    openHeldOrdersModal();
+  }));
+}
+
+
 function openCheckoutModal() {
   renderCheckoutModal('cart');
 }
@@ -317,6 +572,7 @@ function renderCheckoutModal(step) {
       <div class="total-row"><span>Total</span><span>${fmt(total)}</span></div>
       <div class="modal-actions">
         <button class="btn secondary" id="cart-cancel">Fermer</button>
+        <button class="btn secondary" id="cart-hold">⏳ Attente</button>
         <button class="btn" id="cart-next">Encaisser</button>
       </div>
     `);
@@ -328,6 +584,7 @@ function renderCheckoutModal(step) {
       renderCheckoutModal('cart'); updateCartFab();
     }));
     document.getElementById('cart-cancel').addEventListener('click', closeModal);
+    document.getElementById('cart-hold').addEventListener('click', holdCurrentOrder);
     document.getElementById('staff-select').addEventListener('change', (e) => { state.selectedStaffId = e.target.value || null; });
     document.getElementById('client-name').addEventListener('input', (e) => { state.clientName = e.target.value; });
     document.getElementById('cart-next').addEventListener('click', () => {
@@ -453,6 +710,7 @@ function buildReceiptBody(sale) {
   const c = state.config;
   const change = Math.max(0, (sale.cashReceived || 0) - sale.total);
   return `
+    ${c.logo ? `<div class="center"><img src="${c.logo}" style="max-height:16mm; max-width:40mm;"></div>` : ''}
     <div class="center bold">${c.name}</div>
     ${c.address ? `<div class="center">${c.address}</div>` : ''}
     ${c.phone ? `<div class="center">${c.phone}</div>` : ''}
@@ -614,7 +872,7 @@ function renderStaffList() {
   if (state.staff.length === 0) { el.innerHTML = `<p class="empty-state">Aucun employé pour le moment.</p>`; return; }
   el.innerHTML = `<div class="list-box">${state.staff.map((s) => `
     <div class="list-row">
-      <div><strong>${s.name}</strong><div style="font-size:11px; color:var(--muted);">${s.poste || '—'} ${s.salaireBase ? '· ' + fmt(s.salaireBase) : ''}</div></div>
+      <div><strong>${s.name}</strong><div style="font-size:11px; color:var(--muted);">${s.poste || '—'}</div></div>
       <div>
         <button class="icon-btn gold" data-edit="${s.id}">✎</button>
         <button class="icon-btn danger" data-del="${s.id}">🗑</button>
@@ -636,21 +894,18 @@ function openStaffModal(id) {
     <h3>${s ? 'Modifier' : 'Nouvel(le)'} employé(e)</h3>
     <div class="field"><label>Nom complet</label><input type="text" id="st-name" value="${s ? s.name : ''}"></div>
     <div class="field"><label>Poste occupé</label><input type="text" id="st-poste" value="${s ? (s.poste || '') : ''}"></div>
-    <div class="field"><label>Salaire brut mensuel</label><input type="text" id="st-salaire" inputmode="numeric" value="${s ? (s.salaireBase || '') : ''}"></div>
     <div class="modal-actions">
       <button class="btn secondary" id="st-cancel">Annuler</button>
       <button class="btn" id="st-save">Enregistrer</button>
     </div>
   `);
-  document.getElementById('st-salaire').addEventListener('input', (e) => { e.target.value = e.target.value.replace(/[^0-9]/g, ''); });
   document.getElementById('st-cancel').addEventListener('click', closeModal);
   document.getElementById('st-save').addEventListener('click', () => {
     const name = document.getElementById('st-name').value.trim();
     const poste = document.getElementById('st-poste').value.trim();
-    const salaireBase = Number(document.getElementById('st-salaire').value) || 0;
     if (!name) return;
-    if (s) { s.name = name; s.poste = poste; s.salaireBase = salaireBase; }
-    else state.staff.push({ id: uid(), name, poste, salaireBase });
+    if (s) { s.name = name; s.poste = poste; }
+    else state.staff.push({ id: uid(), name, poste });
     save();
     closeModal();
     renderStaffList();
@@ -792,268 +1047,6 @@ function openRewardChoiceModal(client, reward1, reward2) {
 }
 
 // ============================================================
-// UTILISATEURS
-// ============================================================
-function renderUtilisateurs() {
-  const el = document.getElementById('view');
-  el.innerHTML = `
-    <button class="btn small" id="new-user-btn" style="margin-bottom:10px;">+ Nouvel utilisateur</button>
-    <p style="font-size:11px; color:var(--muted); margin-bottom:14px;">Le compte <strong style="color:var(--red);">BITOME</strong> est protégé.</p>
-    <div id="users-list"></div>
-  `;
-  document.getElementById('new-user-btn').addEventListener('click', openNewUserModal);
-  renderUsersList();
-}
-
-function renderUsersList() {
-  const el = document.getElementById('users-list');
-  el.innerHTML = `<div class="list-box">${state.users.map((u) => `
-    <div class="list-row">
-      <div>
-        <strong>${u.protected ? '🛡️ ' : ''}${u.username}</strong>
-        <div style="font-size:11px; color:var(--muted);">${u.role} · ${u.active !== false ? 'actif' : 'inactif'}</div>
-      </div>
-      ${u.protected ? `<span style="font-size:10.5px; color:var(--muted); font-style:italic;">protégé</span>`
-        : `<div><button class="icon-btn gold" data-pass="${u.id}">🔑</button><button class="icon-btn danger" data-del="${u.id}">🗑</button></div>`}
-    </div>
-  `).join('')}</div>`;
-  el.querySelectorAll('[data-pass]').forEach((b) => b.addEventListener('click', () => openChangePasswordModal(b.dataset.pass)));
-  el.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', () => {
-    if (!confirm('Supprimer cet utilisateur ?')) return;
-    state.users = state.users.filter((u) => u.id !== b.dataset.del);
-    save();
-    renderUsersList();
-  }));
-}
-
-function openNewUserModal() {
-  openModal(`
-    <h3>Nouvel utilisateur</h3>
-    <div class="field"><label>Nom d'utilisateur</label><input type="text" id="nu-username"></div>
-    <div class="field"><label>Mot de passe</label><input type="password" id="nu-password"></div>
-    <div class="field"><label>Rôle</label>
-      <select id="nu-role">
-        <option>Administrateur</option><option>Gérant</option><option>Caissier</option><option>Caissière</option><option>Employé</option>
-      </select>
-    </div>
-    <div class="modal-actions">
-      <button class="btn secondary" id="nu-cancel">Annuler</button>
-      <button class="btn" id="nu-save">Créer</button>
-    </div>
-  `);
-  document.getElementById('nu-cancel').addEventListener('click', closeModal);
-  document.getElementById('nu-save').addEventListener('click', async () => {
-    const username = document.getElementById('nu-username').value.trim();
-    const password = document.getElementById('nu-password').value;
-    if (!username || !password) return;
-    if (state.users.some((u) => u.username.toLowerCase() === username.toLowerCase())) { alert('Ce nom existe déjà.'); return; }
-    const passwordHash = await sha256Hex(password);
-    state.users.push({ id: uid(), username, passwordHash, role: document.getElementById('nu-role').value, active: true, protected: false });
-    save();
-    closeModal();
-    renderUsersList();
-  });
-}
-
-function openChangePasswordModal(id) {
-  const u = state.users.find((x) => x.id === id);
-  openModal(`
-    <h3>Nouveau mot de passe — ${u.username}</h3>
-    <div class="field"><label>Mot de passe</label><input type="password" id="cp-password"></div>
-    <div class="modal-actions">
-      <button class="btn secondary" id="cp-cancel">Annuler</button>
-      <button class="btn" id="cp-save">Enregistrer</button>
-    </div>
-  `);
-  document.getElementById('cp-cancel').addEventListener('click', closeModal);
-  document.getElementById('cp-save').addEventListener('click', async () => {
-    const password = document.getElementById('cp-password').value;
-    if (!password) return;
-    u.passwordHash = await sha256Hex(password);
-    save();
-    closeModal();
-  });
-}
-
-// ============================================================
-// POINTAGE
-// ============================================================
-function renderPointage() {
-  const el = document.getElementById('view');
-  el.innerHTML = `<div id="pointage-staff-list" class="list-box" style="margin-bottom:16px;"></div>
-    <h2>Historique du jour</h2>
-    <div id="pointage-today-list" class="list-box"></div>`;
-  refreshPointage();
-}
-
-function refreshPointage() {
-  const staffList = document.getElementById('pointage-staff-list');
-  staffList.innerHTML = state.staff.map((s) => {
-    const active = state.timeEntries.find((t) => t.staffId === s.id && !t.clockOut);
-    return `
-      <div class="list-row">
-        <div><strong>${s.name}</strong>${active ? `<div style="font-size:11px; color:#7E9B76;">En service depuis ${new Date(active.clockIn).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</div>` : `<div style="font-size:11px; color:var(--muted);">Non pointé(e)</div>`}</div>
-        ${active ? `<button class="btn small" style="background:var(--danger);" data-out="${active.id}">Départ</button>` : `<button class="btn small" style="background:#7E9B76;" data-in="${s.id}">Arrivée</button>`}
-      </div>
-    `;
-  }).join('');
-  staffList.querySelectorAll('[data-in]').forEach((b) => b.addEventListener('click', () => {
-    state.timeEntries.push({ id: uid(), staffId: b.dataset.in, clockIn: new Date().toISOString(), clockOut: null });
-    save(); refreshPointage();
-  }));
-  staffList.querySelectorAll('[data-out]').forEach((b) => b.addEventListener('click', () => {
-    const entry = state.timeEntries.find((t) => t.id === b.dataset.out);
-    if (entry) entry.clockOut = new Date().toISOString();
-    save(); refreshPointage();
-  }));
-
-  const todayEntries = state.timeEntries.filter((t) => t.clockIn.slice(0, 10) === todayStr());
-  const listEl = document.getElementById('pointage-today-list');
-  if (todayEntries.length === 0) { listEl.innerHTML = `<p class="empty-state">Aucun pointage aujourd'hui.</p>`; return; }
-  listEl.innerHTML = todayEntries.map((t) => {
-    const s = state.staff.find((x) => x.id === t.staffId);
-    return `<div class="list-row">
-      <div><strong>${s ? s.name : '—'}</strong><div style="font-size:11px; color:var(--muted); font-family:'Consolas',monospace;">${new Date(t.clockIn).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} → ${t.clockOut ? new Date(t.clockOut).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : 'en cours'}</div></div>
-      <button class="icon-btn danger" data-del="${t.id}">🗑</button>
-    </div>`;
-  }).join('');
-  listEl.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', () => {
-    state.timeEntries = state.timeEntries.filter((t) => t.id !== b.dataset.del);
-    save(); refreshPointage();
-  }));
-}
-
-// ============================================================
-// PAIE
-// ============================================================
-function payrollEntryFor(staffId, month) {
-  let entry = state.payrollEntries.find((e) => e.staffId === staffId && e.month === month);
-  if (!entry) {
-    entry = { staffId, month, absences: 0, heuresRetard: 0, sanction: 0, accompte: 0, produitsFacture: 0 };
-    state.payrollEntries.push(entry);
-  }
-  return entry;
-}
-
-function computePayrollRow(staffMember, month) {
-  const brut = staffMember.salaireBase || 0;
-  const entry = payrollEntryFor(staffMember.id, month);
-  const salaireJour = brut / 30;
-  const salaireHeure = brut / 240;
-  const retenueAbsences = (entry.absences || 0) * salaireJour;
-  const retenueRetard = (entry.heuresRetard || 0) * salaireHeure;
-  const netAPayer = Math.max(0, brut - retenueAbsences - retenueRetard - (entry.produitsFacture || 0) - (entry.sanction || 0) - (entry.accompte || 0));
-  return { staff: staffMember, entry, brut, salaireJour, salaireHeure, retenueAbsences, retenueRetard, netAPayer };
-}
-
-function renderPaie() {
-  if (!state.paieMonth) state.paieMonth = monthStr();
-  const el = document.getElementById('view');
-  el.innerHTML = `
-    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
-      <button class="btn secondary small" id="paie-prev">‹</button>
-      <strong style="text-transform:capitalize;">${monthLabel(state.paieMonth)}</strong>
-      <button class="btn secondary small" id="paie-next">›</button>
-    </div>
-    <button class="btn secondary" id="paie-print-btn" style="margin-bottom:14px;">🖨️ Imprimer l'état de paie</button>
-    <div class="kpi-grid"><div class="kpi-card" style="grid-column:span 2;"><div class="k-label">Masse salariale (net à payer)</div><div class="k-value" id="paie-total"></div></div></div>
-    <div id="paie-rows" class="list-box"></div>
-  `;
-  document.getElementById('paie-prev').addEventListener('click', () => { shiftMonth(-1); renderPaie(); });
-  document.getElementById('paie-next').addEventListener('click', () => { shiftMonth(1); renderPaie(); });
-  document.getElementById('paie-print-btn').addEventListener('click', printPaie58mm);
-  refreshPaieRows();
-}
-
-function shiftMonth(delta) {
-  const [y, m] = state.paieMonth.split('-').map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  state.paieMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
-function refreshPaieRows() {
-  const rows = state.staff.map((s) => computePayrollRow(s, state.paieMonth));
-  state.paieRows = rows;
-  const totalNet = rows.reduce((s, r) => s + r.netAPayer, 0);
-  document.getElementById('paie-total').textContent = fmt(totalNet);
-  document.getElementById('paie-rows').innerHTML = rows.map((r, idx) => `
-    <div>
-      <div class="list-row" data-toggle="${r.staff.id}">
-        <div><strong>${idx + 1}. ${r.staff.name}</strong><div style="font-size:11px; color:var(--muted);">${r.staff.poste || '—'} · ${fmt(r.brut)}</div></div>
-        <div style="text-align:right;"><div style="font-weight:700; color:var(--red); font-family:'Consolas',monospace;">${fmt(r.netAPayer)}</div></div>
-      </div>
-      <div id="paie-detail-${r.staff.id}" style="display:none; padding:12px; border-bottom:1px solid var(--border);"></div>
-    </div>
-  `).join('');
-  document.querySelectorAll('[data-toggle]').forEach((row) => row.addEventListener('click', () => togglePaieDetail(row.dataset.toggle)));
-}
-
-function togglePaieDetail(staffId) {
-  const el = document.getElementById('paie-detail-' + staffId);
-  const opening = el.style.display === 'none';
-  document.querySelectorAll('[id^="paie-detail-"]').forEach((d) => d.style.display = 'none');
-  if (!opening) return;
-  const r = state.paieRows.find((x) => x.staff.id === staffId);
-  el.style.display = 'block';
-  el.innerHTML = `
-    <div class="field"><label>Absences (jours)</label><input type="number" data-field="absences" value="${r.entry.absences || 0}"></div>
-    <div class="field"><label>Retard (heures)</label><input type="number" data-field="heuresRetard" value="${r.entry.heuresRetard || 0}"></div>
-    <div class="field"><label>Sanction</label><input type="number" data-field="sanction" value="${r.entry.sanction || 0}"></div>
-    <div class="field"><label>Accompte</label><input type="number" data-field="accompte" value="${r.entry.accompte || 0}"></div>
-    <div class="field"><label>Produits/Facture</label><input type="number" data-field="produitsFacture" value="${r.entry.produitsFacture || 0}"></div>
-    <button class="btn secondary small" id="payslip-btn">📄 Bulletin de salaire</button>
-  `;
-  el.querySelectorAll('[data-field]').forEach((input) => {
-    input.addEventListener('change', (e) => {
-      r.entry[e.target.dataset.field] = Number(e.target.value) || 0;
-      save();
-      refreshPaieRows();
-      document.getElementById('paie-detail-' + staffId).style.display = 'block';
-    });
-  });
-  document.getElementById('payslip-btn').addEventListener('click', () => printPayslip58mm(r));
-}
-
-function printPaie58mm() {
-  const c = state.config;
-  const rows = state.paieRows;
-  const total = rows.reduce((s, r) => s + r.netAPayer, 0);
-  print58mm(`
-    <div class="center bold">${c.name}</div>
-    <div class="dashed"></div>
-    <div class="center">ÉTAT DE PAIE</div>
-    <div class="center">${monthLabel(state.paieMonth)}</div>
-    <div class="dashed"></div>
-    ${rows.map((r, i) => `<div class="line"><span>${i + 1}. ${r.staff.name}</span></div><div class="line"><span>${r.staff.poste || '—'}</span><span>${fmt(r.netAPayer)}</span></div>`).join('<div class="dashed"></div>')}
-    <div class="dashed"></div>
-    <div class="line bold"><span>MASSE SALARIALE</span><span>${fmt(total)}</span></div>
-  `);
-}
-
-function printPayslip58mm(r) {
-  const c = state.config;
-  const e = r.entry;
-  print58mm(`
-    <div class="center bold">${c.name}</div>
-    <div class="dashed"></div>
-    <div class="center">BULLETIN DE SALAIRE</div>
-    <div class="center">${monthLabel(state.paieMonth)}</div>
-    <div class="dashed"></div>
-    <div class="bold">${r.staff.name}</div>
-    <div>${r.staff.poste || '—'}</div>
-    <div class="dashed"></div>
-    <div class="line"><span>Salaire brut</span><span>${fmt(r.brut)}</span></div>
-    <div class="line"><span>Absences (${e.absences || 0}j)</span><span>-${fmt(r.retenueAbsences)}</span></div>
-    <div class="line"><span>Retard (${e.heuresRetard || 0}h)</span><span>-${fmt(r.retenueRetard)}</span></div>
-    <div class="line"><span>Produits/Facture</span><span>-${fmt(e.produitsFacture || 0)}</span></div>
-    <div class="line"><span>Sanction</span><span>-${fmt(e.sanction || 0)}</span></div>
-    <div class="line"><span>Accomptes</span><span>-${fmt(e.accompte || 0)}</span></div>
-    <div class="dashed"></div>
-    <div class="line bold"><span>NET À PAYER</span><span>${fmt(r.netAPayer)}</span></div>
-  `);
-}
-
-// ============================================================
 // BILAN
 // ============================================================
 function renderBilan() {
@@ -1147,6 +1140,7 @@ function printBilan58mm() {
   const rows = state.bilanRows;
   const total = rows.reduce((s, r) => s + r.ca, 0);
   print58mm(`
+    ${c.logo ? `<div class="center"><img src="${c.logo}" style="max-height:16mm; max-width:40mm;"></div>` : ''}
     <div class="center bold">${c.name}</div>
     <div class="dashed"></div>
     <div class="center">BILAN</div>
@@ -1253,6 +1247,7 @@ function openWithdrawalModal() {
 function printCloture58mm() {
   const c = state.config, d = state.clotureData;
   print58mm(`
+    ${c.logo ? `<div class="center"><img src="${c.logo}" style="max-height:16mm; max-width:40mm;"></div>` : ''}
     <div class="center bold">${c.name}</div>
     <div class="dashed"></div>
     <div class="center">CLÔTURE DE CAISSE</div>
@@ -1273,6 +1268,19 @@ function renderReglages() {
   const el = document.getElementById('view');
   const c = state.config;
   el.innerHTML = `
+    <h2>Logo de l'entreprise</h2>
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:20px;">
+      <div style="width:56px; height:56px; border-radius:10px; border:1px solid var(--border); background:var(--card-alt); display:flex; align-items:center; justify-content:center; overflow:hidden;">
+        ${c.logo ? `<img id="logo-preview" src="${c.logo}" style="width:100%; height:100%; object-fit:contain;">` : `<span style="font-size:10px; color:var(--muted);">Aucun</span>`}
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px; flex:1;">
+        <label class="btn secondary small" style="text-align:center; cursor:pointer;">
+          📷 ${c.logo ? 'Changer le logo' : 'Ajouter un logo'}
+          <input type="file" id="logo-file" accept="image/*" style="display:none;">
+        </label>
+        ${c.logo ? `<button class="btn secondary small" id="logo-remove" style="color:var(--danger);">Retirer</button>` : ''}
+      </div>
+    </div>
     <div class="field"><label>Nom du salon</label><input type="text" id="cfg-name" value="${c.name}"></div>
     <div class="field"><label>Adresse</label><input type="text" id="cfg-address" value="${c.address || ''}"></div>
     <div class="field"><label>Téléphone</label><input type="text" id="cfg-phone" value="${c.phone || ''}"></div>
@@ -1296,6 +1304,25 @@ function renderReglages() {
     </div>
     <p style="font-size:11px; color:var(--muted);">Toutes les données sont stockées uniquement sur cet appareil — aucune synchronisation avec un PC ou un autre téléphone.</p>
   `;
+  document.getElementById('logo-file').addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.config.logo = reader.result;
+      save();
+      renderReglages();
+    };
+    reader.readAsDataURL(file);
+  });
+  const logoRemoveBtn = document.getElementById('logo-remove');
+  if (logoRemoveBtn) {
+    logoRemoveBtn.addEventListener('click', () => {
+      state.config.logo = null;
+      save();
+      renderReglages();
+    });
+  }
   document.getElementById('cfg-save').addEventListener('click', () => {
     state.config.name = document.getElementById('cfg-name').value.trim() || DEFAULT_CONFIG.name;
     state.config.address = document.getElementById('cfg-address').value.trim();
@@ -1323,6 +1350,20 @@ function renderReglages() {
 // DÉMARRAGE
 // ============================================================
 (async function boot() {
+  const status = getLicenseStatus();
+  if (status.blocked) {
+    showActivationScreen(status);
+    return;
+  }
+
   load();
   await ensureSuperAdmin();
+  if (state.config.logo) {
+    const logoEl = document.getElementById('login-logo');
+    logoEl.style.display = 'block';
+    logoEl.querySelector('img').src = state.config.logo;
+  }
+  if (!status.licensed) {
+    showTrialBanner(status.daysLeft);
+  }
 })();

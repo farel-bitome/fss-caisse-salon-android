@@ -14,9 +14,6 @@ sans connexion à un serveur, à un PC, ni à internet.
 - **Historique** : ventes passées, réimpression
 - **Prestations** : gestion des prestations et catégories
 - **Personnel** : liste, poste, salaire de base
-- **Utilisateurs** : comptes multiples avec rôles
-- **Pointage** : arrivée/départ, historique du jour
-- **Paie** : saisie mensuelle par employé, état de paie et bulletins imprimables
 - **Bilan** : chiffre d'affaires par collaborateur (jour/semaine/mois/année),
   avec diagramme, imprimable
 - **Clôture** : prélèvements (bloqués si caisse insuffisante), solde en caisse,
@@ -52,3 +49,20 @@ téléphone pour qu'elle apparaisse dans la liste au moment d'imprimer.
   (pas de sauvegarde automatique)
 - Aucun test réel n'a pu être effectué sur un vrai appareil Android de mon
   côté — signalez tout bug rencontré
+
+
+## Licence — essai de 3 jours
+
+L'application fonctionne librement pendant **3 jours** après le premier lancement.
+Passé ce délai, une clé d'activation est **obligatoire** pour continuer à l'utiliser.
+
+**Pour activer un appareil**, utilisez n'importe lequel des générateurs de licence
+déjà mis en place (Windows, HTML, ou Android) — ils utilisent tous le même calcul,
+une clé générée avec l'un fonctionnera avec les autres :
+
+1. Sur le téléphone, l'écran d'activation affiche un **identifiant d'appareil**
+2. Communiquez-le-vous (le développeur), générez la clé avec votre outil habituel
+3. Le client saisit la clé reçue dans l'app pour l'activer définitivement sur cet appareil
+
+⚠️ Comme pour les autres outils de licence, ne partagez jamais le contenu de la
+constante LICENSE_SECRET (présente dans app.js et MainActivity.java) avec vos clients.

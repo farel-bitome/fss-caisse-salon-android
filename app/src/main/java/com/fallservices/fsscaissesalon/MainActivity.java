@@ -6,6 +6,7 @@ import android.content.Context;
 import android.os.Bundle;
 import android.print.PrintAttributes;
 import android.print.PrintManager;
+import android.provider.Settings;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -24,6 +25,7 @@ public class MainActivity extends Activity {
         mainWebView.getSettings().setDomStorageEnabled(true); // nécessaire pour localStorage
         mainWebView.setWebViewClient(new WebViewClient());
         mainWebView.addJavascriptInterface(new PrintBridge(this), "AndroidPrint");
+        mainWebView.addJavascriptInterface(new DeviceBridge(this), "AndroidDevice");
         mainWebView.loadUrl("file:///android_asset/index.html");
 
         setContentView(mainWebView);
@@ -35,6 +37,25 @@ public class MainActivity extends Activity {
             mainWebView.goBack();
         } else {
             super.onBackPressed();
+        }
+    }
+
+    /**
+     * Pont JavaScript <-> Android pour obtenir un identifiant propre à cet
+     * appareil (utilisé pour la licence). ANDROID_ID est unique par
+     * appareil + application, ne nécessite aucune permission particulière,
+     * et ne change pas entre deux lancements (sauf réinitialisation usine).
+     */
+    public static class DeviceBridge {
+        private final Context context;
+
+        DeviceBridge(Context context) {
+            this.context = context;
+        }
+
+        @JavascriptInterface
+        public String getDeviceId() {
+            return Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
         }
     }
 

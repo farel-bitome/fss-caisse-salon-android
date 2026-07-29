@@ -268,6 +268,13 @@ async function ensureSuperAdmin() {
   save();
 }
 
+async function ensureDefaultAdmin() {
+  if (state.users.some((u) => u.username === 'admin')) return;
+  const passwordHash = await sha256Hex('admin');
+  state.users.push({ id: uid(), username: 'admin', passwordHash, role: 'Administrateur', staffId: null, active: true, protected: false });
+  save();
+}
+
 // ---------- Modale générique ----------
 function openModal(html) {
   document.getElementById('modal-content').innerHTML = html;
@@ -334,13 +341,13 @@ function switchView(view, isBack) {
   document.querySelectorAll('.drawer-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   const titles = {
     caisse: 'Caisse', fidelite: 'Fidélité', historique: 'Historique', prestations: 'Prestations',
-    personnel: 'Personnel', bilan: 'Bilan', cloture: 'Clôture', reglages: 'Réglages',
+    personnel: 'Personnel', bilan: 'Bilan', cloture: 'Clôture', reglages: 'Réglages', aide: 'Aide',
   };
   document.getElementById('topbar-title').textContent = titles[view] || '';
   updateMenuBtn();
   const renderers = {
     caisse: renderCaisse, fidelite: renderFidelite, historique: renderHistorique, prestations: renderPrestations,
-    personnel: renderPersonnel, bilan: renderBilan, cloture: renderCloture, reglages: renderReglages,
+    personnel: renderPersonnel, bilan: renderBilan, cloture: renderCloture, reglages: renderReglages, aide: renderAide,
   };
   (renderers[view] || renderCaisse)();
 }
@@ -1264,6 +1271,68 @@ function printCloture58mm() {
 // ============================================================
 // RÉGLAGES
 // ============================================================
+// ============================================================
+// AIDE (dont activation de licence)
+// ============================================================
+function renderAide() {
+  const el = document.getElementById('view');
+  const status = getLicenseStatus();
+
+  el.innerHTML = `
+    <h2>Licence</h2>
+    <div class="list-box" style="padding:14px; margin-bottom:20px;">
+      ${status.licensed
+        ? `<p style="font-size:13px; color:#7E9B76; margin:0 0 4px;">✓ Application activée</p>`
+        : `<p style="font-size:13px; color:${status.trialExpired ? 'var(--danger)' : 'var(--muted)'}; margin:0 0 10px;">
+            ${status.trialExpired ? "⚠️ Période d'essai terminée — activation requise" : `Version d'essai — ${status.daysLeft} jour(s) restant(s)`}
+          </p>`}
+      <div class="field">
+        <label>Identifiant de cet appareil</label>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="aide-device-id" readonly value="${status.deviceId}" style="font-family:'Consolas',monospace; letter-spacing:1px;">
+          <button class="btn secondary small" id="aide-copy" style="width:auto; padding:0 14px;">Copier</button>
+        </div>
+      </div>
+      ${!status.licensed ? `
+        <div class="field">
+          <label>Clé d'activation</label>
+          <input type="text" id="aide-key" placeholder="XXXX-XXXX-XXXX-XXXX" style="font-family:'Consolas',monospace; letter-spacing:1px; text-transform:uppercase;">
+        </div>
+        <p class="error-text" id="aide-error"></p>
+        <button class="btn" id="aide-activate">Activer</button>
+      ` : ''}
+    </div>
+
+    <h2>Contact</h2>
+    <div class="list-box" style="padding:14px;">
+      <p style="font-size:13px; margin:0;">
+        Veuillez contacter FALLSERVICES&SOLUTIONS pour la licence au<br>
+        <strong style="color:var(--red); font-size:15px;">+241 077 37 86 02 / 066 55 58 42</strong>
+      </p>
+    </div>
+  `;
+
+  document.getElementById('aide-copy').addEventListener('click', () => {
+    navigator.clipboard.writeText(status.deviceId);
+    const btn = document.getElementById('aide-copy');
+    const original = btn.textContent;
+    btn.textContent = 'Copié !';
+    setTimeout(() => { btn.textContent = original; }, 1500);
+  });
+
+  const activateBtn = document.getElementById('aide-activate');
+  if (activateBtn) {
+    activateBtn.addEventListener('click', () => {
+      const key = document.getElementById('aide-key').value.trim();
+      const errorEl = document.getElementById('aide-error');
+      if (!key) { errorEl.textContent = "Veuillez saisir une clé d'activation."; return; }
+      if (!isValidLicenseKey(status.deviceId, key)) { errorEl.textContent = 'Clé invalide pour cet appareil.'; return; }
+      localStorage.setItem('fss-license-key', key.trim().toUpperCase());
+      location.reload();
+    });
+  }
+}
+
 function renderReglages() {
   const el = document.getElementById('view');
   const c = state.config;
@@ -1358,6 +1427,7 @@ function renderReglages() {
 
   load();
   await ensureSuperAdmin();
+  await ensureDefaultAdmin();
   if (state.config.logo) {
     const logoEl = document.getElementById('login-logo');
     logoEl.style.display = 'block';
